@@ -17,19 +17,25 @@ package io.spring.batch.partitiondemo.configuration;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import javax.sql.DataSource;
 
 import io.spring.batch.partitiondemo.domain.Transaction;
 
-import org.springframework.batch.core.Job;
-import org.springframework.batch.core.Step;
-import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
-import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
-import org.springframework.batch.core.configuration.annotation.StepScope;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.batch.core.*;
+import org.springframework.batch.core.annotation.BeforeJob;
+import org.springframework.batch.core.configuration.annotation.*;
 import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.launch.support.SimpleJobLauncher;
 import org.springframework.batch.core.partition.PartitionHandler;
 import org.springframework.batch.core.partition.support.MultiResourcePartitioner;
+import org.springframework.batch.core.repository.JobExecutionAlreadyRunningException;
+import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.core.repository.JobRestartException;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.file.FlatFileItemReader;
@@ -48,10 +54,12 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * @author Michael Minella
@@ -76,7 +84,7 @@ public class BatchConfiguration {
 			JobExplorer jobExplorer,
 			ApplicationContext context,
 			Environment environment) throws Exception {
-		Resource resource = context.getResource("file:///Users/mminella/Documents/IntelliJWorkspace/scaling-demos/partitioned-demo/target/partitioned-demo-0.0.1-SNAPSHOT.jar");
+		Resource resource = context.getResource("file:///Users/dturanski/dev/scaling-demos/partitioned-demo/target/partitioned-demo-0.0.1-SNAPSHOT.jar");
 
 		DeployerPartitionHandler partitionHandler = new DeployerPartitionHandler(taskLauncher, jobExplorer, resource, "step1");
 
@@ -191,10 +199,40 @@ public class BatchConfiguration {
 	}
 
 	@Bean
+	@Primary
+	public JobLauncher myJobLauncher(JobRepository jobRepository) throws Exception {
+			MyJobLauncher jobLauncher = new MyJobLauncher();
+			jobLauncher.setJobRepository(jobRepository);
+			jobLauncher.afterPropertiesSet();
+			return jobLauncher;
+	}
+
+
+	@Bean
 	@Profile("!worker")
 	public Job parallelStepsJob() {
 		return this.jobBuilderFactory.get("parallelStepsJob")
 				.start(partitionedMaster(null))
 				.build();
 	}
+
+	public static class MyJobLauncher extends SimpleJobLauncher {
+
+		private static Logger logger = LoggerFactory.getLogger(SimpleJobLauncher.class);
+
+		@Override
+		public JobExecution run(final Job job, final JobParameters jobParameters)
+				throws JobExecutionAlreadyRunningException, JobRestartException, JobInstanceAlreadyCompleteException,
+				JobParametersInvalidException {
+			logger.info("enriching parameters");
+			JobParameters encrichedJobParameters =
+					new JobParametersBuilder()
+							.addJobParameters(jobParameters)
+							.addString("id",UUID.randomUUID().toString())
+							.toJobParameters();
+
+			return super.run(job, encrichedJobParameters);
+		}
+	}
+
 }
