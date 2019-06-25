@@ -240,7 +240,7 @@ public class BatchConfiguration {
 			JobParameters encrichedJobParameters =
 					new JobParametersBuilder()
 							.addJobParameters(jobParameters)
-							.addString("id",UUID.randomUUID().toString())
+							.addString("id",UUID.randomUUID().toString(),true)
 							.toJobParameters();
 
 			return super.run(job, encrichedJobParameters);
