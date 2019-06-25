@@ -15,9 +15,7 @@
  */
 package io.spring.batch.partitiondemo.configuration;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 import javax.sql.DataSource;
 
 import io.spring.batch.partitiondemo.domain.Transaction;
@@ -44,6 +42,7 @@ import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.builder.MultiResourceItemReaderBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.deployer.resource.support.DelegatingResourceLoader;
 import org.springframework.cloud.deployer.spi.task.TaskLauncher;
 import org.springframework.cloud.task.batch.partition.DeployerPartitionHandler;
 import org.springframework.cloud.task.batch.partition.DeployerStepExecutionHandler;
@@ -82,9 +81,13 @@ public class BatchConfiguration {
 	@Bean
 	public DeployerPartitionHandler partitionHandler(TaskLauncher taskLauncher,
 			JobExplorer jobExplorer,
-			ApplicationContext context,
-			Environment environment) throws Exception {
-		Resource resource = context.getResource("file:///Users/dturanski/dev/scaling-demos/partitioned-demo/target/partitioned-demo-0.0.1-SNAPSHOT.jar");
+			Environment environment,
+		    @Value("${partitioned.task.resource}") String partitionedTaskResource
+
+													 ) {
+
+		//Need to do this to get the CF deployer to work
+		Resource resource = delegatingResourceLoader().getResource(partitionedTaskResource);
 
 		DeployerPartitionHandler partitionHandler = new DeployerPartitionHandler(taskLauncher, jobExplorer, resource, "step1");
 
@@ -93,10 +96,14 @@ public class BatchConfiguration {
 		commandLineArgs.add("--spring.cloud.task.initialize.enable=false");
 		commandLineArgs.add("--spring.batch.initializer.enabled=false");
 		commandLineArgs.add("--spring.datasource.initialize=false");
+
 		partitionHandler.setCommandLineArgsProvider(new PassThroughCommandLineArgsProvider(commandLineArgs));
 		partitionHandler.setEnvironmentVariablesProvider(new SimpleEnvironmentVariablesProvider(environment));
 		partitionHandler.setMaxWorkers(3);
 		partitionHandler.setApplicationName("PartitionedBatchJobTask");
+		Map<String,String> deploymentProperties = new HashMap<>();
+		deploymentProperties.put("spring.cloud.deployer.cloudfoundry.services","mysql");
+		partitionHandler.setDeploymentProperties(deploymentProperties);
 
 		return partitionHandler;
 	}
@@ -178,6 +185,11 @@ public class BatchConfiguration {
 				.name("multiresourceReader")
 				.resources(resources)
 				.build();
+	}
+
+	@Bean
+	public DelegatingResourceLoader delegatingResourceLoader(){
+		return new DelegatingResourceLoader();
 	}
 
 	@Bean
