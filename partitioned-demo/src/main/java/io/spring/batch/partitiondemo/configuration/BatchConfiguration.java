@@ -15,26 +15,19 @@
  */
 package io.spring.batch.partitiondemo.configuration;
 
-import java.net.MalformedURLException;
-import java.util.*;
-import javax.sql.DataSource;
-
 import io.spring.batch.partitiondemo.domain.Transaction;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.batch.core.*;
-import org.springframework.batch.core.annotation.BeforeJob;
-import org.springframework.batch.core.configuration.annotation.*;
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.Step;
+import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
+import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.explore.JobExplorer;
-import org.springframework.batch.core.launch.JobLauncher;
-import org.springframework.batch.core.launch.support.SimpleJobLauncher;
+import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.partition.PartitionHandler;
 import org.springframework.batch.core.partition.support.MultiResourcePartitioner;
-import org.springframework.batch.core.repository.JobExecutionAlreadyRunningException;
-import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.repository.JobRepository;
-import org.springframework.batch.core.repository.JobRestartException;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.file.FlatFileItemReader;
@@ -43,30 +36,34 @@ import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.builder.MultiResourceItemReaderBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cloud.deployer.resource.support.DelegatingResourceLoader;
 import org.springframework.cloud.deployer.spi.task.TaskLauncher;
 import org.springframework.cloud.task.batch.partition.DeployerPartitionHandler;
 import org.springframework.cloud.task.batch.partition.DeployerStepExecutionHandler;
-import org.springframework.cloud.task.batch.partition.EnvironmentVariablesProvider;
 import org.springframework.cloud.task.batch.partition.PassThroughCommandLineArgsProvider;
 import org.springframework.cloud.task.batch.partition.SimpleEnvironmentVariablesProvider;
-import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.UrlResource;
-import org.springframework.transaction.PlatformTransactionManager;
+
+import javax.sql.DataSource;
+import java.net.MalformedURLException;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * @author Michael Minella
  */
 @Configuration
 public class BatchConfiguration {
+	private final Logger logger = LoggerFactory.getLogger(BatchConfiguration.class);
 
 	@Autowired
 	private JobBuilderFactory jobBuilderFactory;
@@ -92,16 +89,18 @@ public class BatchConfiguration {
 
 		List<String> commandLineArgs = new ArrayList<>(3);
 		commandLineArgs.add("--spring.profiles.active=worker");
-		//commandLineArgs.add("--spring.cloud.task.initialize.enable=false");
-		//commandLineArgs.add("--spring.batch.initializer.enabled=false");
-		//commandLineArgs.add("--spring.datasource.initialize=false");
+		commandLineArgs.add("--spring.cloud.task.initialize.enable=false");
+		commandLineArgs.add("--spring.batch.initializer.enabled=false");
+		commandLineArgs.add("--spring.datasource.initialize=false");
 
 		partitionHandler.setCommandLineArgsProvider(new PassThroughCommandLineArgsProvider(commandLineArgs));
-		partitionHandler.setEnvironmentVariablesProvider(new SimpleEnvironmentVariablesProvider(environment));
+		SimpleEnvironmentVariablesProvider simpleEnvironmentVariablesProvider = new SimpleEnvironmentVariablesProvider(environment);
+		simpleEnvironmentVariablesProvider.setIncludeCurrentEnvironment(false);
+		partitionHandler.setEnvironmentVariablesProvider(simpleEnvironmentVariablesProvider);
 		partitionHandler.setMaxWorkers(3);
-		partitionHandler.setApplicationName("PartitionedBatchJobTask");
+		partitionHandler.setApplicationName("partitioned-demo");
 		Map<String,String> deploymentProperties = new HashMap<>();
-		deploymentProperties.put("spring.cloud.deployer.cloudfoundry.services","mysql");
+		//deploymentProperties.put("spring.cloud.deployer.cloudfoundry.services","mysql");
 		deploymentProperties.put("spring.cloud.deployer.cloudfoundry.push-task-apps-enabled","false");
 		partitionHandler.setDeploymentProperties(deploymentProperties);
 
@@ -129,10 +128,9 @@ public class BatchConfiguration {
 	@StepScope
 	public FlatFileItemReader<Transaction> fileTransactionReader(
 			@Value("#{stepExecutionContext['file']}") Resource resource) {
-
 		return new FlatFileItemReaderBuilder<Transaction>()
 				.name("flatFileTransactionReader")
-				.resource(resource)
+				.resource(new ClassPathResource("/data/csv/"+resource.getFilename()))
 				.delimited()
 				.names(new String[] {"account", "amount", "timestamp"})
 				.fieldSetMapper(fieldSet -> {
@@ -150,6 +148,11 @@ public class BatchConfiguration {
 	@Bean
 	@StepScope
 	public JdbcBatchItemWriter<Transaction> writer(DataSource dataSource) {
+		try {
+			logger.info("writing to database == ", dataSource.getConnection().getCatalog());
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}
 		return new JdbcBatchItemWriterBuilder<Transaction>()
 				.dataSource(dataSource)
 				.beanMapped()
@@ -188,11 +191,6 @@ public class BatchConfiguration {
 	}
 
 	@Bean
-	public DelegatingResourceLoader delegatingResourceLoader(){
-		return new DelegatingResourceLoader();
-	}
-
-	@Bean
 	public FlatFileItemReader<Transaction> delegate() {
 		return new FlatFileItemReaderBuilder<Transaction>()
 				.name("flatFileTransactionReader")
@@ -211,40 +209,11 @@ public class BatchConfiguration {
 	}
 
 	@Bean
-	@Primary
-	public JobLauncher myJobLauncher(JobRepository jobRepository) throws Exception {
-			MyJobLauncher jobLauncher = new MyJobLauncher();
-			jobLauncher.setJobRepository(jobRepository);
-			jobLauncher.afterPropertiesSet();
-			return jobLauncher;
-	}
-
-
-	@Bean
 	@Profile("!worker")
 	public Job parallelStepsJob() {
 		return this.jobBuilderFactory.get("parallelStepsJob")
+				.incrementer(new RunIdIncrementer())
 				.start(partitionedMaster(null))
 				.build();
 	}
-
-	public static class MyJobLauncher extends SimpleJobLauncher {
-
-		private static Logger logger = LoggerFactory.getLogger(SimpleJobLauncher.class);
-
-		@Override
-		public JobExecution run(final Job job, final JobParameters jobParameters)
-				throws JobExecutionAlreadyRunningException, JobRestartException, JobInstanceAlreadyCompleteException,
-				JobParametersInvalidException {
-			logger.info("enriching parameters");
-			JobParameters encrichedJobParameters =
-					new JobParametersBuilder()
-							.addJobParameters(jobParameters)
-							.addString("id",UUID.randomUUID().toString())
-							.toJobParameters();
-
-			return super.run(job, encrichedJobParameters);
-		}
-	}
-
 }
