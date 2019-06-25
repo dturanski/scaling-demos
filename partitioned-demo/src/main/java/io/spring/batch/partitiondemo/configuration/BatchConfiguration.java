@@ -15,6 +15,7 @@
  */
 package io.spring.batch.partitiondemo.configuration;
 
+import java.net.MalformedURLException;
 import java.util.*;
 import javax.sql.DataSource;
 
@@ -58,6 +59,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.core.io.UrlResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
@@ -81,21 +83,18 @@ public class BatchConfiguration {
 	@Bean
 	public DeployerPartitionHandler partitionHandler(TaskLauncher taskLauncher,
 			JobExplorer jobExplorer,
-			Environment environment,
-		    @Value("${partitioned.task.resource}") String partitionedTaskResource
-
-													 ) {
+			Environment environment) throws MalformedURLException {
 
 		//Need to do this to get the CF deployer to work
-		Resource resource = delegatingResourceLoader().getResource(partitionedTaskResource);
+		Resource resource = new UrlResource("http://nothing");
 
 		DeployerPartitionHandler partitionHandler = new DeployerPartitionHandler(taskLauncher, jobExplorer, resource, "step1");
 
 		List<String> commandLineArgs = new ArrayList<>(3);
 		commandLineArgs.add("--spring.profiles.active=worker");
-		commandLineArgs.add("--spring.cloud.task.initialize.enable=false");
-		commandLineArgs.add("--spring.batch.initializer.enabled=false");
-		commandLineArgs.add("--spring.datasource.initialize=false");
+		//commandLineArgs.add("--spring.cloud.task.initialize.enable=false");
+		//commandLineArgs.add("--spring.batch.initializer.enabled=false");
+		//commandLineArgs.add("--spring.datasource.initialize=false");
 
 		partitionHandler.setCommandLineArgsProvider(new PassThroughCommandLineArgsProvider(commandLineArgs));
 		partitionHandler.setEnvironmentVariablesProvider(new SimpleEnvironmentVariablesProvider(environment));
@@ -103,6 +102,7 @@ public class BatchConfiguration {
 		partitionHandler.setApplicationName("PartitionedBatchJobTask");
 		Map<String,String> deploymentProperties = new HashMap<>();
 		deploymentProperties.put("spring.cloud.deployer.cloudfoundry.services","mysql");
+		deploymentProperties.put("spring.cloud.deployer.cloudfoundry.push-task-apps-enabled","false");
 		partitionHandler.setDeploymentProperties(deploymentProperties);
 
 		return partitionHandler;
